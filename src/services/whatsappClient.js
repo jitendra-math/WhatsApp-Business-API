@@ -1,4 +1,4 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import MessageLog from '../models/MessageLog.js';
@@ -11,14 +11,19 @@ export const initializeWhatsAppClient = async () => {
     try {
         console.log('Starting Baileys WhatsApp Client...');
         
+        // NAYA CODE: WhatsApp ka latest version fetch karna taaki 405 error na aaye
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        console.log(`Using WhatsApp Web Version: ${version.join('.')} (isLatest: ${isLatest})`);
+
         // Session credentials save karne ka setup
         const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
 
         const sockConfig = {
+            version, // Version ko yahan pass kiya hai
             auth: state,
-            printQRInTerminal: false, // Faltu warning band
+            printQRInTerminal: false,
             logger: pino({ level: 'silent' }), 
-            browser: ['Ubuntu', 'Chrome', '110.0.5481.192'], // WhatsApp ko lagega real PC hai
+            browser: ['Ubuntu', 'Chrome', '110.0.5481.192'], 
             syncFullHistory: false 
         };
 
@@ -44,8 +49,7 @@ export const initializeWhatsAppClient = async () => {
                 const statusCode = (error instanceof Boom) ? error.output?.statusCode : 500;
                 
                 console.log(`Connection closed! Reason Code: ${statusCode}`);
-                console.log('Error details:', error?.message || 'No specific error message');
-
+                
                 if (statusCode === DisconnectReason.loggedOut) {
                     clientStatus = 'DISCONNECTED';
                     console.log('Logged out! You will need to scan QR again.');
