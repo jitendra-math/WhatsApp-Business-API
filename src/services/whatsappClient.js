@@ -14,20 +14,15 @@ export const initializeWhatsAppClient = async () => {
         // Session credentials save karne ka setup
         const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
 
-        const sock = makeWASocket.default ? makeWASocket.default({
+        const sockConfig = {
             auth: state,
-            printQRInTerminal: true, // Ab Render logs mein bhi QR dikhega
-            logger: pino({ level: 'error' }), // Silent hata diya, taaki error dikhe
-            browser: ['JSS API', 'Chrome', '1.0.0'],
-            syncFullHistory: false // RAM bachane ke liye background sync off
-        }) : makeWASocket({
-            auth: state,
-            printQRInTerminal: true,
-            logger: pino({ level: 'error' }),
-            browser: ['JSS API', 'Chrome', '1.0.0'],
-            syncFullHistory: false
-        });
+            printQRInTerminal: false, // Faltu warning band
+            logger: pino({ level: 'silent' }), 
+            browser: ['Ubuntu', 'Chrome', '110.0.5481.192'], // WhatsApp ko lagega real PC hai
+            syncFullHistory: false 
+        };
 
+        const sock = makeWASocket.default ? makeWASocket.default(sockConfig) : makeWASocket(sockConfig);
         clientInstance = sock;
 
         // Credentials update hone par save karna
@@ -45,16 +40,19 @@ export const initializeWhatsAppClient = async () => {
 
             if (connection === 'close') {
                 latestQR = null;
-                const shouldReconnect = (lastDisconnect?.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+                const error = lastDisconnect?.error;
+                const statusCode = (error instanceof Boom) ? error.output?.statusCode : 500;
                 
-                console.log('Connection closed. Reconnecting:', shouldReconnect);
-                
-                if (shouldReconnect) {
-                    clientStatus = 'INITIALIZING';
-                    setTimeout(initializeWhatsAppClient, 3000); // Auto reconnect
-                } else {
+                console.log(`Connection closed! Reason Code: ${statusCode}`);
+                console.log('Error details:', error?.message || 'No specific error message');
+
+                if (statusCode === DisconnectReason.loggedOut) {
                     clientStatus = 'DISCONNECTED';
                     console.log('Logged out! You will need to scan QR again.');
+                } else {
+                    clientStatus = 'INITIALIZING';
+                    console.log('Reconnecting in 5 seconds...');
+                    setTimeout(initializeWhatsAppClient, 5000);
                 }
             } else if (connection === 'open') {
                 latestQR = null;
