@@ -11,10 +11,13 @@
   "author": "Jitu Banna",
   "license": "ISC",
   "dependencies": {
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "mongoose": "^8.4.0",
     "qrcode": "^1.5.3",
-    "whatsapp-web.js": "^1.23.0"
+    "whatsapp-web.js": "^1.23.0",
+    "wwebjs-mongo": "^1.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
