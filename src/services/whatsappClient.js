@@ -15,7 +15,7 @@ export const initializeWhatsAppClient = () => {
   clientInstance = new Client({
     authStrategy: new RemoteAuth({
       store: store,
-      backupSyncIntervalMs: 300000 // Har 5 minute mein session sync karega
+      backupSyncIntervalMs: 60000 // Har 1 minute mein session sync karega
     }),
     puppeteer: puppeteerConfig
   });
@@ -50,10 +50,17 @@ export const initializeWhatsAppClient = () => {
     clientStatus = 'DISCONNECTED';
     latestQR = null;
     console.log('WhatsApp Client Disconnected:', reason);
-    clientInstance.initialize();
+    
+    // Disconnect hone par bhi thoda delay dekar restart karenge
+    setTimeout(() => {
+      clientInstance.initialize();
+    }, 5000);
   });
 
-  clientInstance.initialize();
+  // Server boot hone ke baad CPU/RAM ko thoda stabilize hone ka time de rahe hain (3 sec delay)
+  setTimeout(() => {
+    clientInstance.initialize();
+  }, 3000);
 };
 
 export const getClient = () => {
