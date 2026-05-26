@@ -1,75 +1,91 @@
-import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
-import { puppeteerConfig } from '../config/wwebjsConfig.js';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import pino from 'pino';
 import MessageLog from '../models/MessageLog.js';
 
 let clientInstance = null;
 let latestQR = null;
 let clientStatus = 'INITIALIZING';
 
-export const initializeWhatsAppClient = () => {
-  // Render RAM limit ke liye wapas LocalAuth par shift
-  clientInstance = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: puppeteerConfig
-  });
+export const initializeWhatsAppClient = async () => {
+    // Session credentials save karne ka setup
+    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
 
-  clientInstance.on('qr', (qr) => {
-    latestQR = qr;
-    clientStatus = 'AWAITING_QR';
-    console.log('QR Code generated. Fetch it via API.');
-  });
+    const sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }), // Faltu logs rokne ke liye
+        browser: ['JSS Originals', 'Chrome', '1.0.0']
+    });
 
-  clientInstance.on('ready', () => {
-    latestQR = null;
-    clientStatus = 'READY';
-    console.log('WhatsApp Client is READY!');
-  });
+    clientInstance = sock;
 
-  clientInstance.on('authenticated', () => {
-    console.log('WhatsApp Client Authenticated!');
-  });
+    // Credentials update hone par save karna
+    sock.ev.on('creds.update', saveCreds);
 
-  clientInstance.on('auth_failure', (msg) => {
-    clientStatus = 'AUTH_FAILED';
-    console.error('Authentication Failed:', msg);
-  });
+    // Connection aur QR state manage karna
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-  clientInstance.on('disconnected', (reason) => {
-    clientStatus = 'DISCONNECTED';
-    latestQR = null;
-    console.log('WhatsApp Client Disconnected:', reason);
-    
-    setTimeout(() => {
-      clientInstance.initialize();
-    }, 5000);
-  });
+        if (qr) {
+            latestQR = qr;
+            clientStatus = 'AWAITING_QR';
+            console.log('QR Code generated. Fetch it via API.');
+        }
 
-  // NAYA: Incoming Messages catch karke MongoDB mein save karna
-  clientInstance.on('message', async (msg) => {
-    try {
-      await MessageLog.create({
-        type: 'incoming',
-        number: msg.from.replace('@c.us', ''),
-        message: msg.body,
-        status: 'received'
-      });
-      console.log(`Saved incoming message from ${msg.from.replace('@c.us', '')}`);
-    } catch (err) {
-      console.error('Failed to save incoming message to DB:', err);
-    }
-  });
+        if (connection === 'close') {
+            latestQR = null;
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            
+            console.log('Connection closed. Reconnecting:', shouldReconnect);
+            
+            if (shouldReconnect) {
+                clientStatus = 'INITIALIZING';
+                initializeWhatsAppClient(); // Auto reconnect
+            } else {
+                clientStatus = 'DISCONNECTED';
+                console.log('Logged out! You will need to scan QR again.');
+            }
+        } else if (connection === 'open') {
+            latestQR = null;
+            clientStatus = 'READY';
+            console.log('WhatsApp Client is READY! Connected to WebSockets.');
+        }
+    });
 
-  setTimeout(() => {
-    clientInstance.initialize();
-  }, 3000);
+    // Incoming messages catch karke MongoDB mein save karna
+    sock.ev.on('messages.upsert', async (m) => {
+        if (m.type !== 'notify') return;
+        const msg = m.messages[0];
+        
+        // Khud ka bheja hua message ignore karo
+        if (!msg.message || msg.key.fromMe) return;
+
+        const senderNumber = msg.key.remoteJid.split('@')[0];
+        // Text nikalne ka Baileys format
+        const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text;
+
+        if (textMessage) {
+            try {
+                await MessageLog.create({
+                    type: 'incoming',
+                    number: senderNumber,
+                    message: textMessage,
+                    status: 'received'
+                });
+                console.log(`Saved incoming message from ${senderNumber}`);
+            } catch (err) {
+                console.error('Failed to save incoming message to DB:', err);
+            }
+        }
+    });
 };
 
 export const getClient = () => {
-  if (clientStatus === 'READY') {
-    return clientInstance;
-  }
-  return null;
+    if (clientStatus === 'READY') {
+        return clientInstance;
+    }
+    return null;
 };
 
 export const getLatestQR = () => latestQR;

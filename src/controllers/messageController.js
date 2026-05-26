@@ -21,32 +21,33 @@ export const sendMessage = async (req, res) => {
       });
     }
 
-    const formattedNumber = `${number}@c.us`;
+    // Baileys format ke liye id
+    const formattedNumber = `${number}@s.whatsapp.net`;
     
     try {
-      // Message bhejne ki koshish
-      const response = await client.sendMessage(formattedNumber, message);
+      // Message bhejne ka naya syntax
+      const response = await client.sendMessage(formattedNumber, { text: message });
       
-      // MongoDB mein Success Audit Log save karna
+      // MongoDB mein Success Audit Log
       await MessageLog.create({
         type: 'outgoing',
         number: number,
         message: message,
         status: 'sent',
-        whatsappMessageId: response.id.id
+        whatsappMessageId: response?.key?.id || 'unknown'
       });
 
       return res.status(200).json({
         success: true,
         message: 'Message sent successfully.',
         data: {
-          id: response.id.id,
-          timestamp: response.timestamp
+          id: response?.key?.id,
+          timestamp: response?.messageTimestamp
         }
       });
 
     } catch (sendError) {
-      // MongoDB mein Failure Audit Log save karna
+      // MongoDB mein Failure Audit Log
       await MessageLog.create({
         type: 'outgoing',
         number: number,
@@ -55,7 +56,7 @@ export const sendMessage = async (req, res) => {
         errorReason: sendError.message
       });
 
-      throw sendError; // Upar wale catch block mein bhej do taaki 500 error return ho
+      throw sendError; 
     }
 
   } catch (error) {
