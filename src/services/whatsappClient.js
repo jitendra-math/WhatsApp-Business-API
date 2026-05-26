@@ -1,22 +1,16 @@
 import pkg from 'whatsapp-web.js';
-const { Client, RemoteAuth } = pkg;
-import { MongoStore } from 'wwebjs-mongo';
-import mongoose from 'mongoose';
+const { Client, LocalAuth } = pkg;
 import { puppeteerConfig } from '../config/wwebjsConfig.js';
+import MessageLog from '../models/MessageLog.js';
 
 let clientInstance = null;
 let latestQR = null;
 let clientStatus = 'INITIALIZING';
 
 export const initializeWhatsAppClient = () => {
-  // Mongoose connection ka use karke MongoStore setup karna
-  const store = new MongoStore({ mongoose: mongoose });
-
+  // Render RAM limit ke liye wapas LocalAuth par shift
   clientInstance = new Client({
-    authStrategy: new RemoteAuth({
-      store: store,
-      backupSyncIntervalMs: 60000 // Har 1 minute mein session sync karega
-    }),
+    authStrategy: new LocalAuth(),
     puppeteer: puppeteerConfig
   });
 
@@ -36,11 +30,6 @@ export const initializeWhatsAppClient = () => {
     console.log('WhatsApp Client Authenticated!');
   });
 
-  // Yeh naya event confirm karega ki Mongo DB mein session chala gaya hai
-  clientInstance.on('remote_session_saved', () => {
-    console.log('WhatsApp remote session successfully saved to MongoDB.');
-  });
-
   clientInstance.on('auth_failure', (msg) => {
     clientStatus = 'AUTH_FAILED';
     console.error('Authentication Failed:', msg);
@@ -51,13 +40,26 @@ export const initializeWhatsAppClient = () => {
     latestQR = null;
     console.log('WhatsApp Client Disconnected:', reason);
     
-    // Disconnect hone par bhi thoda delay dekar restart karenge
     setTimeout(() => {
       clientInstance.initialize();
     }, 5000);
   });
 
-  // Server boot hone ke baad CPU/RAM ko thoda stabilize hone ka time de rahe hain (3 sec delay)
+  // NAYA: Incoming Messages catch karke MongoDB mein save karna
+  clientInstance.on('message', async (msg) => {
+    try {
+      await MessageLog.create({
+        type: 'incoming',
+        number: msg.from.replace('@c.us', ''),
+        message: msg.body,
+        status: 'received'
+      });
+      console.log(`Saved incoming message from ${msg.from.replace('@c.us', '')}`);
+    } catch (err) {
+      console.error('Failed to save incoming message to DB:', err);
+    }
+  });
+
   setTimeout(() => {
     clientInstance.initialize();
   }, 3000);
@@ -71,5 +73,4 @@ export const getClient = () => {
 };
 
 export const getLatestQR = () => latestQR;
-
 export const getClientStatus = () => clientStatus;
