@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import app from './src/app.js';
 import { initializeWhatsAppClient } from './src/services/whatsappClient.js';
+import { startScheduler } from './src/services/schedulerService.js';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -21,6 +22,9 @@ mongoose.connect(MONGODB_URI)
     
     // WhatsApp bot ko background mein start karne ke liye
     initializeWhatsAppClient();
+
+    // Scheduled messages background job start karo
+    startScheduler();
 
     // Express server ko start karne ke liye
     app.listen(PORT, () => {
