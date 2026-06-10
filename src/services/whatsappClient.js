@@ -106,3 +106,20 @@ export const getClient = () => {
 
 export const getLatestQR = () => latestQR;
 export const getClientStatus = () => clientStatus;
+
+// NAYA FUNCTION: Connected number return karega (agar READY hai)
+export const getConnectedNumber = () => {
+    if (clientStatus !== 'READY' || !clientInstance) {
+        return null;
+    }
+    try {
+        // Baileys client mein user id hoti hai format "91xxxxx@s.whatsapp.net"
+        const userId = clientInstance.user?.id;
+        if (!userId) return null;
+        const number = userId.split('@')[0];
+        return number;
+    } catch (err) {
+        console.error('Error getting connected number:', err);
+        return null;
+    }
+};
