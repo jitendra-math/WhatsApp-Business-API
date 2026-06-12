@@ -1,103 +1,116 @@
 import { getClient } from '../services/whatsappClient.js';
-import { generateWAMessageFromContent, proto } from '@whiskeysockets/baileys';
+import { sendInteractiveMessage as sendBaileysInteractive } from 'baileys_helper';
 import MessageLog from '../models/MessageLog.js';
 import InteractiveLog from '../models/InteractiveLog.js';
 
+/**
+ * Send interactive message with buttons (copy, call, URL, reply)
+ * POST /api/interactive/send
+ * Body: {
+ *   number: "919876543210",
+ *   title: "Optional header title",
+ *   body: "Main message text",
+ *   footer: "Optional footer",
+ *   buttons: [
+ *     { type: "copy", text: "Copy OTP", code: "123456", id: "copy_btn" },
+ *     { type: "reply", text: "Yes", id: "yes_btn" },
+ *     { type: "url", text: "Visit Site", url: "https://example.com" },
+ *     { type: "call", text: "Call Support", phone: "+919876543210" }
+ *   ]
+ * }
+ */
 export const sendInteractiveMessage = async (req, res) => {
     try {
         const { number, title, body, footer, buttons } = req.body;
 
+        // Validations
         if (!number || !body || !buttons || !Array.isArray(buttons) || buttons.length === 0) {
-            return res.status(400).json({ success: false, error: 'Missing required fields' });
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: number, body, and buttons array'
+            });
+        }
+
+        if (buttons.length > 3) {
+            return res.status(400).json({
+                success: false,
+                error: 'Maximum 3 buttons allowed per interactive message'
+            });
         }
 
         const client = getClient();
-        if (!client) return res.status(503).json({ success: false, error: 'Client not ready' });
+        if (!client) {
+            return res.status(503).json({
+                success: false,
+                error: 'WhatsApp client not ready. Please check auth status.'
+            });
+        }
 
         const formattedNumber = `${number}@s.whatsapp.net`;
 
-        // Build native flow buttons
-        const nativeButtons = [];
-        for (const btn of buttons) {
+        // Convert buttons to baileys_helper format
+        const interactiveButtons = buttons.map(btn => {
             if (btn.type === 'copy') {
-                nativeButtons.push({
-                    name: 'cta_copy',
-                    buttonParamsJson: JSON.stringify({
-                        display_text: btn.text || 'Copy',
-                        id: btn.id || `copy_${Date.now()}`,
-                        copy_code: btn.code
-                    })
-                });
+                if (!btn.code) throw new Error('Copy button requires "code" field');
+                return {
+                    type: 'copy',
+                    text: btn.text || 'Copy',
+                    code: btn.code,
+                    id: btn.id || `copy_${Date.now()}`
+                };
             } else if (btn.type === 'reply') {
-                nativeButtons.push({
-                    name: 'quick_reply',
-                    buttonParamsJson: JSON.stringify({
-                        display_text: btn.text || 'Reply',
-                        id: btn.id || `reply_${Date.now()}`
-                    })
-                });
+                if (!btn.id) throw new Error('Reply button requires "id" field');
+                return {
+                    type: 'reply',
+                    text: btn.text || 'Reply',
+                    id: btn.id
+                };
             } else if (btn.type === 'url') {
-                nativeButtons.push({
-                    name: 'cta_url',
-                    buttonParamsJson: JSON.stringify({
-                        display_text: btn.text || 'Visit',
-                        url: btn.url,
-                        merchant_url: btn.url
-                    })
-                });
+                if (!btn.url) throw new Error('URL button requires "url" field');
+                return {
+                    type: 'url',
+                    text: btn.text || 'Visit',
+                    url: btn.url
+                };
             } else if (btn.type === 'call') {
-                nativeButtons.push({
-                    name: 'cta_call',
-                    buttonParamsJson: JSON.stringify({
-                        display_text: btn.text || 'Call',
-                        phone_number: btn.phone
-                    })
-                });
+                if (!btn.phone) throw new Error('Call button requires "phone" field');
+                return {
+                    type: 'call',
+                    text: btn.text || 'Call',
+                    phone: btn.phone
+                };
+            } else {
+                throw new Error(`Unsupported button type: ${btn.type}`);
             }
-        }
-
-        // Create interactive message with nativeFlowMessage
-        const interactiveMsg = proto.Message.InteractiveMessage.create({
-            body: { text: body },
-            header: title ? { title } : undefined,
-            footer: footer ? { text: footer } : undefined,
-            nativeFlowMessage: { buttons: nativeButtons }
         });
 
-        // Wrap in viewOnceMessage (critical for rendering)
-        const messageContent = {
-            viewOnceMessage: {
-                message: {
-                    messageContextInfo: {
-                        deviceListMetadata: {},
-                        deviceListMetadataVersion: 2
-                    },
-                    interactiveMessage: interactiveMsg
-                }
+        // Use baileys_helper to send
+        const response = await sendBaileysInteractive(
+            client,
+            formattedNumber,
+            {
+                bodyText: body,
+                title: title || undefined,
+                footer: footer || undefined,
+                buttons: interactiveButtons
             }
-        };
+        );
 
-        // Generate and relay
-        const waMessage = generateWAMessageFromContent(formattedNumber, messageContent, {
-            userJid: client.user.id
-        });
-        await client.relayMessage(formattedNumber, waMessage.message, {
-            messageId: waMessage.key.id
-        });
-
-        // Logging
+        // Log to MessageLog
         await MessageLog.create({
             type: 'outgoing',
-            number,
-            message: `[INTERACTIVE] ${body}`,
+            number: number,
+            message: `[INTERACTIVE] ${body} | Buttons: ${buttons.map(b => b.text).join(', ')}`,
             status: 'sent',
-            whatsappMessageId: waMessage.key.id
+            whatsappMessageId: response?.key?.id || 'unknown'
         });
+
+        // Log to InteractiveLog for detailed tracking
         await InteractiveLog.create({
-            messageId: waMessage.key.id,
-            number,
-            body,
-            buttons,
+            messageId: response?.key?.id,
+            number: number,
+            body: body,
+            buttons: buttons,
             title: title || null,
             footer: footer || null,
             status: 'sent'
@@ -105,10 +118,28 @@ export const sendInteractiveMessage = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            messageId: waMessage.key.id
+            message: 'Interactive message sent successfully',
+            data: {
+                id: response?.key?.id,
+                timestamp: response?.messageTimestamp
+            }
         });
+
     } catch (error) {
-        console.error('Interactive error:', error);
-        return res.status(500).json({ success: false, error: error.message });
+        console.error('Interactive message error:', error);
+        // Log failure to InteractiveLog if possible
+        try {
+            await InteractiveLog.create({
+                number: req.body?.number,
+                body: req.body?.body || 'unknown',
+                buttons: req.body?.buttons || [],
+                status: 'failed',
+                errorReason: error.message
+            });
+        } catch (logErr) {}
+        return res.status(500).json({
+            success: false,
+            error: error.message
+        });
     }
 };
