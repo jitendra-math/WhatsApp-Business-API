@@ -47,60 +47,85 @@ export const sendInteractiveMessage = async (req, res) => {
 
         const formattedNumber = `${number}@s.whatsapp.net`;
 
-        // Build interactive buttons array as per Baileys spec
-        const interactiveButtons = buttons.map((btn, idx) => {
-            const base = { index: idx };
+        // Build interactive buttons for Baileys (correct format for version 6.x)
+        const interactiveButtons = [];
+        for (const btn of buttons) {
             if (btn.type === 'copy') {
-                if (!btn.code) throw new Error('Copy button requires "code" field');
-                return {
-                    ...base,
-                    name: 'copy',
-                    copy_code: btn.code,
-                    button_params_json: JSON.stringify({ display_text: btn.text || 'Copy' })
-                };
-            } else if (btn.type === 'reply') {
-                if (!btn.id) throw new Error('Reply button requires "id" field');
-                return {
-                    ...base,
+                if (!btn.code) {
+                    return res.status(400).json({ success: false, error: 'Copy button requires "code" field' });
+                }
+                interactiveButtons.push({
+                    name: 'cta_copy',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: btn.text || 'Copy',
+                        id: btn.code,
+                        copy_code: btn.code
+                    })
+                });
+            } 
+            else if (btn.type === 'reply') {
+                if (!btn.id) {
+                    return res.status(400).json({ success: false, error: 'Reply button requires "id" field' });
+                }
+                interactiveButtons.push({
                     name: 'quick_reply',
-                    button_params_json: JSON.stringify({ display_text: btn.text || 'Reply', id: btn.id })
-                };
-            } else if (btn.type === 'url') {
-                if (!btn.url) throw new Error('URL button requires "url" field');
-                return {
-                    ...base,
-                    name: 'cta_url',
-                    button_params_json: JSON.stringify({ display_text: btn.text || 'Visit', url: btn.url })
-                };
-            } else if (btn.type === 'call') {
-                if (!btn.phone) throw new Error('Call button requires "phone" field');
-                return {
-                    ...base,
-                    name: 'cta_call',
-                    button_params_json: JSON.stringify({ display_text: btn.text || 'Call', phone_number: btn.phone })
-                };
-            } else {
-                throw new Error(`Unsupported button type: ${btn.type}`);
+                    buttonParamsJson: JSON.stringify({
+                        display_text: btn.text || 'Reply',
+                        id: btn.id
+                    })
+                });
             }
-        });
+            else if (btn.type === 'url') {
+                if (!btn.url) {
+                    return res.status(400).json({ success: false, error: 'URL button requires "url" field' });
+                }
+                interactiveButtons.push({
+                    name: 'cta_url',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: btn.text || 'Visit',
+                        url: btn.url
+                    })
+                });
+            }
+            else if (btn.type === 'call') {
+                if (!btn.phone) {
+                    return res.status(400).json({ success: false, error: 'Call button requires "phone" field' });
+                }
+                interactiveButtons.push({
+                    name: 'cta_call',
+                    buttonParamsJson: JSON.stringify({
+                        display_text: btn.text || 'Call',
+                        phone_number: btn.phone
+                    })
+                });
+            }
+            else {
+                return res.status(400).json({ success: false, error: `Unsupported button type: ${btn.type}` });
+            }
+        }
 
-        // Interactive message structure
+        // Interactive message structure – according to Baileys docs
         const interactiveMessage = {
+            text: body,  // fallback text
             interactive: {
                 type: 'button',
-                header: title ? { type: 'text', text: title } : undefined,
                 body: { text: body },
-                footer: footer ? { text: footer } : undefined,
                 action: {
                     buttons: interactiveButtons
                 }
             }
         };
 
-        // Remove undefined fields
-        if (!title) delete interactiveMessage.interactive.header;
+        // Add header if title provided
+        if (title) {
+            interactiveMessage.interactive.header = { type: 'text', text: title };
+        }
+        // Add footer if provided
+        if (footer) {
+            interactiveMessage.interactive.footer = { text: footer };
+        }
 
-        // Send message
+        // Send the message
         const response = await client.sendMessage(formattedNumber, interactiveMessage);
 
         // Log to MessageLog
