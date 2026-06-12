@@ -1,4 +1,4 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@vkazee/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import MessageLog from '../models/MessageLog.js';
