@@ -2,6 +2,7 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import MessageLog from '../models/MessageLog.js';
+import ButtonResponse from '../models/ButtonResponse.js';   // <-- NAYA IMPORT
 
 let clientInstance = null;
 let latestQR = null;
@@ -11,15 +12,13 @@ export const initializeWhatsAppClient = async () => {
     try {
         console.log('Starting Baileys WhatsApp Client...');
         
-        // NAYA CODE: WhatsApp ka latest version fetch karna taaki 405 error na aaye
         const { version, isLatest } = await fetchLatestBaileysVersion();
         console.log(`Using WhatsApp Web Version: ${version.join('.')} (isLatest: ${isLatest})`);
 
-        // Session credentials save karne ka setup
         const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
 
         const sockConfig = {
-            version, // Version ko yahan pass kiya hai
+            version,
             auth: state,
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }), 
@@ -30,17 +29,15 @@ export const initializeWhatsAppClient = async () => {
         const sock = makeWASocket.default ? makeWASocket.default(sockConfig) : makeWASocket(sockConfig);
         clientInstance = sock;
 
-        // Credentials update hone par save karna
         sock.ev.on('creds.update', saveCreds);
 
-        // Connection aur QR state manage karna
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
                 latestQR = qr;
                 clientStatus = 'AWAITING_QR';
-                console.log('QR Code generated successfully! Fetch it via API.');
+                console.log('QR Code generated successfully!');
             }
 
             if (connection === 'close') {
@@ -61,21 +58,63 @@ export const initializeWhatsAppClient = async () => {
             } else if (connection === 'open') {
                 latestQR = null;
                 clientStatus = 'READY';
-                console.log('WhatsApp Client is READY! Connected to WebSockets.');
+                console.log('WhatsApp Client is READY!');
             }
         });
 
-        // Incoming messages catch karke MongoDB mein save karna
+        // ======================================================
+        // INCOMING MESSAGES + BUTTON CLICKS HANDLER
+        // ======================================================
         sock.ev.on('messages.upsert', async (m) => {
             if (m.type !== 'notify') return;
             const msg = m.messages[0];
-            
-            // Khud ka bheja hua message ignore karo
             if (!msg.message || msg.key.fromMe) return;
 
-            const senderNumber = msg.key.remoteJid.split('@')[0];
-            const textMessage = msg.message.conversation || msg.message.extendedTextMessage?.text;
+            const senderJid = msg.key.remoteJid;
+            const senderNumber = senderJid.split('@')[0];
+            const msgContent = msg.message;
 
+            // ---------- 1. Detect Interactive Button Click ----------
+            let buttonId = null;
+            let responseText = null;
+
+            // Older format (buttonsResponseMessage)
+            if (msgContent?.buttonsResponseMessage) {
+                buttonId = msgContent.buttonsResponseMessage.selectedButtonId;
+                responseText = msgContent.buttonsResponseMessage.selectedDisplayText;
+            }
+            // Newer format (interactiveResponseMessage with nativeFlow)
+            else if (msgContent?.interactiveResponseMessage?.nativeFlowResponseMessage) {
+                try {
+                    const params = JSON.parse(msgContent.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+                    buttonId = params.id;
+                    responseText = params.display_text;
+                } catch(e) {
+                    console.error('Failed to parse native flow params', e);
+                }
+            }
+
+            // Agar button click hai toh database se response laake bhejo
+            if (buttonId) {
+                console.log(`🔘 Button click detected: ID = ${buttonId}, From = ${senderNumber}`);
+
+                try {
+                    // Database se lookup
+                    const flow = await ButtonResponse.findOne({ buttonId });
+                    let replyMessage = flow?.responseMessage || "✅ Thank you for your response!";
+
+                    // Send reply
+                    await sock.sendMessage(senderJid, { text: replyMessage });
+                    console.log(`Auto-reply sent for button ${buttonId}`);
+                } catch (err) {
+                    console.error(`Error handling button ${buttonId}:`, err);
+                    await sock.sendMessage(senderJid, { text: "⚠️ Sorry, something went wrong. Please try again." });
+                }
+                return; // Button handled, no need to log as normal text
+            }
+
+            // ---------- 2. Normal Text Message ----------
+            const textMessage = msgContent.conversation || msgContent.extendedTextMessage?.text;
             if (textMessage) {
                 try {
                     await MessageLog.create({
@@ -86,7 +125,7 @@ export const initializeWhatsAppClient = async () => {
                     });
                     console.log(`Saved incoming message from ${senderNumber}`);
                 } catch (err) {
-                    console.error('Failed to save incoming message to DB:', err);
+                    console.error('Failed to save incoming message:', err);
                 }
             }
         });
@@ -107,13 +146,11 @@ export const getClient = () => {
 export const getLatestQR = () => latestQR;
 export const getClientStatus = () => clientStatus;
 
-// NAYA FUNCTION: Connected number return karega (agar READY hai)
 export const getConnectedNumber = () => {
     if (clientStatus !== 'READY' || !clientInstance) {
         return null;
     }
     try {
-        // Baileys client mein user id hoti hai format "91xxxxx@s.whatsapp.net"
         const userId = clientInstance.user?.id;
         if (!userId) return null;
         const number = userId.split('@')[0];
